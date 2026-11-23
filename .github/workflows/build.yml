@@ -1,0 +1,69 @@
+name: build-touch-arm64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ 'dev/f12_refactor', main ]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install WDK 10.0.26100
+        shell: pwsh
+        run: |
+          $kits = 'C:\Program Files (x86)\Windows Kits\10\build'
+          if (Test-Path $kits) { Write-Host 'WDK already present'; exit 0 }
+          $ids = @('Microsoft.WindowsWDK.10.0.26100','Microsoft.WindowsWDK.10.0.22621')
+          foreach ($id in $ids) {
+            winget install --id $id -e --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if (Test-Path $kits) { break }
+          }
+          if (-not (Test-Path $kits)) { throw 'WDK installation failed' }
+
+      - name: Build ARM64 Release
+        shell: pwsh
+        run: |
+          msbuild contrib\SynapticsTouch.sln /m /p:Configuration=Release /p:Platform=ARM64 /p:SignMode=Off /p:RunCodeAnalysis=false /p:EnableApiValidation=false "/flp:LogFile=msbuild-touch.log;Verbosity=normal"
+          Write-Host "exit=$LASTEXITCODE"
+          exit 0
+
+      - name: Collect outputs
+        shell: pwsh
+        run: |
+          $out = 'out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $outAbs = (Resolve-Path $out).Path
+          $found = @(Get-ChildItem -Recurse -Include *.sys,*.inf -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -notlike ($outAbs + '\*') })
+          foreach ($f in $found) { Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $outAbs $f.Name) -Force }
+          Get-ChildItem $out | Format-Table Name,Length
+          if (-not (Get-ChildItem $out -Filter *.sys)) { Write-Host "::warning::没有 .sys 产物" }
+
+      - name: Generate test certificate and sign
+        shell: pwsh
+        run: |
+          if (-not (Get-ChildItem out -Filter *.sys)) { exit 0 }
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=WDKTestCert dsh-touch,20261123' -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -NotAfter (Get-Date).AddYears(10)
+          $pw = ConvertTo-SecureString -String 'dsh' -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath out\test.pfx -Password $pw | Out-Null
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          foreach ($f in Get-ChildItem out -Filter *.sys) {
+            & $signtool.FullName sign /fd sha256 /f out\test.pfx /p dsh $f.FullName
+            $s = Get-AuthenticodeSignature $f.FullName
+            Write-Host ("{0}: {1}" -f $f.Name, $s.Status)
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: touch-arm64-${{ github.run_number }}
+          path: |
+            out/**
+            msbuild-touch.log
+          if-no-files-found: warn
