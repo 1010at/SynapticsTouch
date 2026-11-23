@@ -1,4 +1,4 @@
-name: build-touch-arm64
+﻿name: build-touch-arm64
 
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
       - name: Build ARM64 Release
         shell: pwsh
         run: |
-          msbuild contrib\SynapticsTouch.sln /m /p:Configuration=Release /p:Platform=ARM64 /p:SignMode=Off /p:RunCodeAnalysis=false /p:EnableApiValidation=false "/flp:LogFile=msbuild-touch.log;Verbosity=normal"
+          msbuild contrib\SynapticsTouch.sln /m /p:Configuration=Release /p:Platform=ARM64 /p:SignMode=Off /p:RunCodeAnalysis=false /p:EnableApiValidation=false /p:WindowsTargetPlatformVersion=10.0.26100.0 "/flp:LogFile=msbuild-touch.log;Verbosity=normal"
           Write-Host "exit=$LASTEXITCODE"
           exit 0
 
